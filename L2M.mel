@@ -1,0 +1,1002 @@
+/* 
+Ldd to Maya converter script by Brandon Bower
+Created on 5/24/2018, in Maya 2018
+Open to public use, as well as modification, but in no way can be distributed, or modified and distributed for financial gain
+
+Instructions: Run code, enjoy! :D
+*/
+
+//Decides what file type will be filter for
+string $singleFilter = "*.lxfml";
+//Initializes Checkboxes
+string $arnCheck;
+string $rdCheck;
+string $drtCheck;
+//Used to check wether Arnold or Redshift is checked
+int $rendInt = 0;
+//Used to check if normal maps and/or dirt maps are wanted
+int $norm = 0;
+int $dirt = 0;
+
+//Array to track that both path fields have been filled
+int $checkIfFilled[] = {0,0};
+
+//Checks if Window already exists, and if it does, deletes it    
+if(`window -ex "strtWindow"`){
+    deleteUI "strtWindow";
+}
+
+//Sets window title, if it is scalable, and name of window
+window -t "Ldd to Maya Settings"  -s false "strtWindow";
+    //Sets window layout to cloumns
+    columnLayout;
+        //Creates button, that when pressed launches a file dialog, changes button label to file path, and checks if all fields have yet been filled using the allFill procedure
+        string $fileButton = `button -l "Select .lxfml file path" -w 280 -c "string $filePath[] = `fileDialog2 -fileFilter $singleFilter -cap \"Select File to Convert\" -fm 1 -dialogStyle 2`; button -edit -l $filePath[0] $fileButton; $checkIfFilled[0] = 1; allFill($checkIfFilled, $convertButton);"` ;
+        //Creates button, that when pressed launches a file dialog, changes button label to file path, and checks if all fields have yet been filled using the allFill procedure
+        string $brickButton = `button -l "Select Brick Library Path" -w 280  -c "string $brickPath[] = `fileDialog2 -cap \"Select File to Convert\" -fm 3 -dialogStyle 2`; button -edit -l $brickPath[0] $brickButton; $checkIfFilled[1] = 1; allFill($checkIfFilled, $convertButton);"` ;
+        //Text, self explanatory
+        text "Select Render Engine: \n (If all options left unchecked, blinn will be used)";
+        //Creates Arnold checkbox, that when checked toggles the Redshift checkbox as unselectable, also makes the dirt checkbox usable 
+        $arnCheck = `checkBox -l "Arnold" -ann "Script will create Arnold Materials." -onc"if(`pluginInfo -q -r \"redshift4maya\"` == 1){ $rendInt = 1; checkBox -edit -en false $rdCheck;} checkBox -edit -en true $drtCheck;" -ofc"if(`pluginInfo -q -r \"redshift4maya\"` == 1){ $rendInt = 0; checkBox -edit -en true $rdCheck; } checkBox -edit -en false $drtCheck;"`;
+        //Checks if Redshift is installed
+        if(`pluginInfo -q -r "redshift4maya"` == 1){
+            //Creates a checkbox for Redshift, that when checked toggles the Arnold checkbox as unselectable, also makes the dirt checkbox usable
+            $rdCheck = `checkBox -l "Redshift" -ann "Script will create Redshift Materials." -onc"$rendInt = 2; checkBox -edit -en false $arnCheck; checkBox -edit -en true $drtCheck;" -ofc"$rendInt = 0; checkBox -edit -en true $arnCheck; checkBox -edit -en false $drtCheck;"`;
+        }
+        //Text, self explanatroy
+        text "Want normal and/or dirt maps applied?";
+        //Creates Normal map checkbox, that when checked sets $norm to 1
+        checkBox -l "Normal Maps" -ann "Bricks will appear to have Lego logos, and bevels. Achieved through normal maps." -onc "$norm = 1;" -ofc "$norm = 0;";
+        //Creates Dirt map checkbox, that when checked sets $dirt to 1
+        $drtCheck = `checkBox -l "Dirt" -en false -ann "Bricks will have dirt applied to look used/more realistic." -onc "$dirt = 1" -ofc "$dirt = 0;"`;
+        //Creates the final button, in a unenabled state, when button is clicked, triggers the read procedure
+        string $convertButton = `button -l "Convert! :D" -en false -w 280 -c"deleteUI \"strtWindow\"; readProc($filePath[0],$brickPath[0], $rendInt, $norm, $dirt);"`; 
+
+//Shows Window        
+showWindow "strtWindow";
+//Sets Window Size
+window -e -wh 280 180 "strtWindow";
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//Procedure to check if all fields have filled, using the $checkIfFilled Array. Also passes in the $convertButton, so state can be changed.
+proc allFill(int $check[], string $button){
+    //Checks that both text fields have been filled.
+    if($check[0] == 1 && $check[1] == 1){
+        //Enables convert button
+        button -edit -en true $button;   
+    }else{
+        //Disables convert button
+        button -edit -en false $button;   
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//Procedure to read lxfml file and convert it to raw data, gets passed the (file, brick library path, what render engine is being used, if normal maps are wanted, and if dirt maps are wanted)
+proc readProc(string $file, string $bPath, int $rEng, int $norm, int $dirt){
+    //Initializes arrays for sorting
+    string $sortArray1[];
+    string $sortArray2[];
+    string $sortArray3[];
+    string $brickArray[];
+    string $brickNumb;
+    string $colorArray[];
+    string $decoArray[];
+    string $posArray[];
+    float $posFArray[];
+    //Initializes counter variables
+    int $i = 0;
+    int $index;
+    int $lpCount;
+    int $start;
+    int $end;
+    //Takes passed in lxfml file, and gives it unique identifier id
+    int $fileId=fopen($file,"r");
+    //Sets $next line to top line of the file
+    string $nextLine = `fgetline $fileId`;
+    //Sets a loop that only goes while there are lines of text to be read
+    while ( size( $nextLine ) > 0 ) {
+        //Sets each line as a spot in the array
+        $sortArray1[$i] = ($nextLine);
+        //Strips white space from either side of text in each array element
+        $sortArray1[$i] = strip($sortArray1[$i]);
+        //Advances counter to continue filling the array
+        $i++;
+        //Advances to next line
+    	$nextLine = `fgetline $fileId`;	
+    }
+    
+    //Now to sort out the bricks from the unneeded lines of code
+    
+    //Sets the start of desired selection, +2 is added so "</Cameras>" and the line below it are excluded
+    $start = (stringArrayFind("</Cameras>", 0, $sortArray1)+ 2);
+    //Sets the end of desired selection
+    $end = stringArrayFind("</Bricks>",0, $sortArray1);
+    //Sets index to 0 to be used as a counter
+    $index = 0;
+    //Initializes for loop that starts at start of selection and goes until the end of the selection is reached
+    for($i = $start; $i < $end; $i++){
+        //Sets $sortArray3 at [$index] to $sortArray1 at [$i]
+        $sortArray3[$index] = $sortArray1[$i];
+        //Advances $index so nothing is overwritten
+        $index++;
+    }
+
+    //Next is to remove all the filler between the bricks
+    
+    //Fill $items array with the strings needing to be removed
+    string $items[] = {"</Brick>","</Part>"};
+    //Takes sort Array2 and sets it equal to sortArray3 minus the items in $items
+    string $sortArray2[] = stringArrayRemove($items, $sortArray3);
+    //Clears $sortArray1 $sortArray3 $items and index, so they can be used anew
+    clear $sortArray1;
+    clear $sortArray3; 
+    clear $items;
+    $index = 0;
+    //The "<Brick refid...." line on some of the bricks are not needed, and thus will be removed
+    //Sets loops to run while $sortArray2 has elements to sort through
+    while(size($sortArray2) > 0){
+        //Finds "</Bone>" which is what devides each section, and sets where it occurs in the array as our end number
+        $end = stringArrayFind("</Bone>",0, $sortArray2);
+        //Starts loop that will run until $i = $end
+        for($i = 0; $i <= $end; $i++){
+            //Puts everything up to and including the first occurance of "</Bone>" into $sortArray3
+            $sortArray3[$i] = $sortArray2[$i];
+        }
+        //Checks to see if $sortArray3 has the "<Brick refid..." line that needs to removed
+        if(size($sortArray3) == 4){
+            //Removes "<Brick refid..."
+            stringArrayRemoveAtIndex(3, $sortArray3);
+            //Removes "</Bone>"
+            stringArrayRemoveAtIndex(0, $sortArray3);
+            //Sets the contents of sortArray3 at 0 to sortArray1 at index
+            $sortArray1[$index] = $sortArray3[0];
+            //Advances index to avoid overwriting
+            $index++;
+            //Sets the contents of sortArray3 at 1 to sortArray1 at index
+            $sortArray1[$index] = $sortArray3[1];
+            //Advances index to avoid overwriting
+            $index++;
+            //Removes the lines of $sortArray2 that have just been gone through
+            stringArrayRemoveAtIndex(0, $sortArray2);
+            stringArrayRemoveAtIndex(0, $sortArray2);
+            stringArrayRemoveAtIndex(0, $sortArray2);
+            stringArrayRemoveAtIndex(0, $sortArray2); 
+        //Checks to see if $sortArray3 doesn't have the "<Brick refid..." line that needs to removed   
+        }else if(size($sortArray3) == 3){
+            //Removes "</Bone>"
+            stringArrayRemoveAtIndex(2, $sortArray3);
+            //Sets the contents of sortArray3 at 0 to sortArray1 at index
+            $sortArray1[$index] = $sortArray3[0];
+            //Advances index to avoid overwriting
+            $index++;
+            //Sets the contents of sortArray3 at 1 to sortArray1 at index
+            $sortArray1[$index] = $sortArray3[1];
+            //Advances index to avoid overwriting
+            $index++;
+            //Removes the lines of $sortArray2 that have just been gone through
+            stringArrayRemoveAtIndex(0, $sortArray2);
+            stringArrayRemoveAtIndex(0, $sortArray2);
+            stringArrayRemoveAtIndex(0, $sortArray2);  
+        }
+    } 
+    //Clears $sortArray2, $sortArray3, and $index to be used anew
+    clear $sortArray2;
+    clear $sortArray3;
+    $index = 0;
+    
+    //Getting closer to the values needed
+    
+    //Initializes for loop that only goes while there are entries in $sortArray1 to be read
+    for($i = 0; $i < size($sortArray1); $i++){
+        //Splits each entry wherever there is a space, and sorts the new strings into $sortAray2 
+        tokenize($sortArray1[$i], " ", $sortArray2);
+        //Removes "<Part" and "refID = "#" as they are unneeded
+        stringArrayRemoveAtIndex(0, $sortArray2);
+        stringArrayRemoveAtIndex(0, $sortArray2);
+        //Some bricks don't have a decoration, so an empty value must be added to work with code later down the line
+        //Checks for if array is 2, one short of the usual 3, meaning no decoration is present
+        if(size($sortArray2) == 2){
+            //inserts decoration at array element 2 (the end of the array)
+            stringArrayInsertAtIndex(2, $sortArray2, "decoration=\"0,0,0\"");        
+        }
+        //Resets $lpCount so it can be used anew
+        $lpCount = 0;
+        //Tokenize rewrites over $sortArray2 each time the above for loop is called, to prevent loss of information, each tokenize iteration resault must be saved to a unique spot $sortArray3
+        //Not all tokenize iterations are the same length, so the loop is set to go as long as $sortArray2 has elements
+        while($lpCount < size($sortArray2)){
+            //Takes whatever is stored in $sortArray2 at [$lpCount] and also stores it into $sortArray3 at [$index]
+            $sortArray3[$index] = $sortArray2[$lpCount];
+            //Advances index so nothing in $sortArray3 gets overwritten 
+            $index++;
+            //Advances $lpCount so the while loop can end, as well as cycle through all elements of $sortArray2
+            $lpCount++;
+            }
+    }
+    //Clears $sortAray1, $sortArray2 and $index so they can be used anew
+    clear $sortArray1;
+    clear $sortArray2;
+    $index = 0;
+    
+    //Next level of sorting to get at just the values
+    
+    //Initializes for loop that goes as long as there are entries in $sortArray3
+    for($i = 0; $i < size($sortArray3); $i++){
+        //Splits each entry wherever there is a backslash, and sorts the new strings into $sortArray1 
+        tokenize($sortArray3[$i], "\"", $sortArray1);
+        //Removes the designator text before the number as it is unneeded
+        stringArrayRemoveAtIndex(0, $sortArray1);
+        //Rests $lpCount so it can be used anew
+        $lpCount = 0;
+        //Just like last time, the elements of the array tokenize sorts into ($sortArray1), must be copied to a new array ($sortArray2) so as not to be overwritten
+        //Sets a loop for size of $sortArray1
+        while($lpCount < size($sortArray1)){
+            //Takes whatever is stored in $sortArray1 at [$lpCount] and also stores it into $sortArray2 at [$index]
+            $sortArray2[$index] = $sortArray1[$lpCount];
+            //Advances index so nothing in $sortArray2 gets overwritten
+            $index++;
+            //Advances $lpCount so the while loop can end, as well as cycle through all elements of $sortArray1
+            $lpCount++;
+            }
+    }
+    
+    //Removing the remaining ">" symbols from the code
+    
+    //Clears $items and $sortArray1 so they can be used anew
+    clear $items;
+    clear $sortArray1;
+    //Fills $items with one element, ">"
+    string $items[] = { ">" };
+    //Sets $sortArray1 to $sortArray2 minus the itmes (in this case ">") in $items
+    string $sortArray1[] = stringArrayRemove($items, $sortArray2);
+    //Resets $lpCount and $index so they can be used anew
+    $lpCount = 0;
+    $index = 1;
+    //Sets $end to be size of the array/4, since the loop deals with 4 lines of code at a time 
+    $end = size($sortArray1)/4;
+    //Initializes loop
+    for($i = 0; $i < $end; $i++){
+       //Sets $brickNumb to the first element of the array, which is the number LDD uses to I.D. bricks 
+       $brickNumb = $sortArray1[0];
+       //Takes the color numbers, and puts them each in a different element of the $colorArray
+       tokenize ($sortArray1[1], "," , $colorArray);
+       //Takes the decoration numbers, and puts them each in a different element of the $decoArray
+       tokenize ($sortArray1[2], "," , $decoArray);
+       //Takes the position numbers(not currently in use), and puts them each in a different element of the $posArray
+       tokenize ($sortArray1[3], "," , $posArray); 
+       //The position numbers go into a transformation matrix, but they are lacking the last column, so those numbers are added here
+       stringArrayInsertAtIndex(3, $posArray, "0");
+       stringArrayInsertAtIndex(7, $posArray, "0");
+       stringArrayInsertAtIndex(11, $posArray, "0");
+       stringArrayInsertAtIndex(15, $posArray, "1");
+       //The numbers in the position array are currently strings. This loop converts them to floats and puts them in the $posFArray
+       for($lpCount = 0; $lpCount < size($posArray); $lpCount++){
+           $posFArray[$lpCount] = (float)$posArray[$lpCount];
+       }
+       //Sets $allPath to the complete path to the brick
+       string $allPath = ($bPath + "/Bricks/"  + $brickNumb + ".obj");
+       //Checks to see if the brick that the path leads to exists
+       if (`filetest -r $allPath` == 1){
+           //If brick exists, calls the brickPlace procedure, which returns index, so that the scripts can properly update to cycle through each brick
+           $index = brickPlace($bPath, $brickNumb, $colorArray, $decoArray, $posFArray, $rEng, $norm, $dirt, $index);
+       }
+       //Deletes the four array elements that have just been read, so the next time the loop is called, a new brick will be looked at
+       stringArrayRemoveAtIndex(0, $sortArray1);
+       stringArrayRemoveAtIndex(0, $sortArray1);
+       stringArrayRemoveAtIndex(0, $sortArray1);
+       stringArrayRemoveAtIndex(0, $sortArray1);
+         
+    } 
+    
+} 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//Procedure that places the brick and assigns material, gets passed (path name, brick number, color array, decoration array(not currently in use), position array, render engine int, normal int, dirt int, and index int)
+proc int brickPlace(string $pathName, string $bNumb, string $color[], string $deco[], float $pos[], int $rEng, int $norm, int $dirt, int $index){
+    //Imports the brick specified by brickNumb
+    file -import -type "OBJ"  -ignoreVersion -ra true -mergeNamespacesOnClash false -options "mo=1" -namespace "brick_1"  -pr ($pathName + "/Bricks/"  + $bNumb + ".obj");
+    //Calls colorLibrary, which uses the color array to find what color is needed, and then returns with an array of the numbers needed to make the color
+    $color = colorLibrary($color);
+    //Checks to see if the color has already been made into a material
+    if ((`objExists ($color[8] + $bNumb)`) == false){
+        //Checks to see if render engine is set to Arnold
+        if($rEng == 1){
+          //Calls the arnold material procedure if Arnold is the selected engine, and the material has not yet been made
+          arnMat($bNumb, $color, $pathName, $dirt, $norm);  
+        //Checks to see if render engine is set to Redshift
+        }else if($rEng == 2){
+          //Calls the Redshift material procedure if Redshift is the selected engine, and the material has not yet been made
+          rdMat($bNumb, $color, $pathName, $dirt, $norm);
+        //If no render engine has been selected, program defaults to Blinn material
+        }else{
+          //Calls the Blinn material procedure if no engine has been selected, and the material has not yet been made
+          blnMat($bNumb, $color, $pathName, $dirt, $norm);
+        }
+    }
+    //Selects the brick that has just been imported
+    select ("brick_" + $index + ":*");
+    //Places and rotates the brick based on the transform matrix stored in the $pos array
+    xform -m $pos[0] $pos[1] $pos[2] $pos[3] $pos[4] $pos[5] $pos[6] $pos[7] $pos[8] $pos[9] $pos[10] $pos[11] $pos[12] $pos[13] $pos[14] $pos[15];
+    //Assigns the correct material to the brick
+    hyperShade -assign ($color[8] + $bNumb);
+	//Freezes transform of brick
+	makeIdentity -apply true -t 1 -r 1 -s 1 -n 0 -pn 1;
+    //Advances $index so as not to select any previous bricks that have been placed
+    $index++;
+    //Returns index so it can be updated and passed back to this procedure
+    return $index;  
+} 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//Procedure to make the blinn material, gets passed (brick number, color array, library path, dirt int, norm int)
+proc blnMat(string $brickNumb, string $colAr[], string $txP, int $dirt, int $norm){
+    //Initializes array for float numbers
+    float $colArF[];
+    //Creates blinn shader
+    string $myMat = `shadingNode -asShader blinn -n ($colAr[8] + $brickNumb)`;
+    //Creates render set thing(I'm not positive on what this does but every material seems to have one)
+    string $mySet = `sets -renderable true -noSurfaceShader true -empty -name ($myMat + "SG")`;
+    //Connects blinn to set
+    connectAttr -f ($myMat + ".outColor") ($mySet + ".surfaceShader");
+    //initializes i
+    int $i;
+    //Loop for converting color library array to floats from strings, -1 for size becuase the final element is the name of the color, and cannot be converted to a float
+    for($i = 0; $i < (size($colAr)-1); $i++){
+        $colArF[$i] = (float)$colAr[$i];
+    } 
+    //Sees if the user wants normal maps
+    if($norm == 1){
+        //Creates a file node
+        string $file1 = `shadingNode -asTexture -isColorManaged -n ($colAr[8] + "_normal_file") file`;
+        //Sets the file node to Raw color space
+        setAttr($file1 + ".colorSpace") -type "string" "Raw";
+        //Creates a place2dtexture node
+        string $pTex1 = `shadingNode -asUtility place2dTexture`;
+        //Calls the place2dtexture connect procedure, which connects the p2dtexture to the file node
+        p2DTexConnect($pTex1, $file1);
+        //Creates a bump2d node
+        $bump2D = `shadingNode -asUtility bump2d`;
+        //Sets the bump2d node to be looking for normal map input
+        setAttr ($bump2D + ".bumpInterp") 1;
+        //Connects the file node to the bump2d node 
+        connectAttr -f ($file1 + ".outAlpha") ($bump2D + ".bumpValue");
+        //Connects the bump2d node to the blinn shader
+        connectAttr -f ($bump2D + ".outNormal") ($myMat + ".normalCamera");
+        //Sets the file node's file
+        setAttr -type "string" ($file1 +".fileTextureName") ($txP + "/Textures/Normal/" + $brickNumb + "NM" + ".png") ;
+    }
+    //Sets the blinn's color
+    setAttr ($myMat + ".color") -type double3 $colArF[0]  $colArF[1] $colArF[2];
+    //Sets the blinn's diffuse
+    setAttr ($myMat + ".diffuse") $colArF[3];
+    //Sets the blinn's specular rolloff
+    setAttr ($myMat + ".specularRollOff") $colArF[4];
+    //Sets the blinn's transparency 
+    setAttr ($myMat + ".transparency") $colArF[5] $colArF[5] $colArF[5];
+    //Sets the blinn's reflectivity
+    setAttr ($myMat + ".reflectivity") 0.06;    
+}
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//Procedure to make the arnold material, gets passed (brick number, color array, library path, dirt int, norm int)
+proc arnMat(string $brickNumb, string $colAr[], string $txP, int $dirt, int $norm){
+    //Initializes array for float numbers
+    float $colArF[];
+    //Creats and Arnold Standard Surface shader
+    string $myMat = `shadingNode -asShader aiStandardSurface -n ($colAr[8] + $brickNumb)`;
+    //Creates render set thing(I'm not positive on what this does but every material seems to have one)
+    string $mySet = `sets -renderable true -noSurfaceShader true -empty -name ($myMat + "SG")`;
+    //Connects Arnold material to set
+    connectAttr -f ($myMat + ".outColor") ($mySet + ".surfaceShader");
+    //initializes i
+    int $i;
+    //Loop for converting color library array to floats from strings, -1 for size becuase the final element is the name of the color, and cannot be converted to a float
+    for($i = 0; $i < (size($colAr)-1); $i++){
+        $colArF[$i] = (float)$colAr[$i];
+    } 
+    //Initializes the $file1 and $aNorm variables, so they can be called outside of this if statement
+    string $file1;
+    string $aNorm;
+    //Sees if the user wants normal maps
+    if($norm == 1){
+        //Creates a file node for base normal map
+        $file1 = `shadingNode -asTexture -isColorManaged -n ($colAr[8] + "_normal_file") file`;
+        //Sets the file node to Raw color space
+        setAttr($file1 + ".colorSpace") -type "string" "Raw";
+        //Creates a place2dtexture node
+        string $pTex1 = `shadingNode -asUtility place2dTexture`;
+        //Calls the place2dtexture connect procedure, which connects the p2dtexture to the file node
+        p2DTexConnect($pTex1, $file1);
+        //Creates and Arnold normal map node
+        $aNorm = `shadingNode -asUtility aiNormalMap`;
+        //Connects file node to Arnold normal node
+        connectAttr -f ($file1 + ".outColor") ($aNorm + ".input");
+        //Connects Arnold normal node to Arnold material
+        connectAttr -f ($aNorm + ".outValue") ($myMat + ".normalCamera");
+        //Sets the base normal map file node's file
+        setAttr -type "string" ($file1 +".fileTextureName") ($txP + "/Textures/Normal/" + $brickNumb + "NM" + ".png") ;
+    }
+    //Sets the Arnold material base color
+    setAttr ($myMat + ".baseColor") -type double3 $colArF[0]  $colArF[1] $colArF[2];
+    //Sets the Arnold material base color weight
+    setAttr ($myMat + ".base") $colArF[3];
+    setAttr ($myMat + ".specularRoughness") $colArF[4];
+    //Sets the Arnold material transparency
+    setAttr ($myMat + ".transmission") $colArF[5];
+    //Sets the Arnold material coat roughness
+    setAttr ($myMat + ".coatRoughness") $colArF[6];
+    //Sets the Arnold material coat IOR
+    setAttr ($myMat + ".coatIOR") $colArF[7];
+    //Checks to see if the user wants dirt maps applied
+    if($dirt == 1){
+        //Sets $rndNum to a random number, so dirt maps can be randomly applied (currently I only have one map, thus this only returns "1" at the moment
+        int $rndNm = `rand 1 2`;
+        //Creates a file node for dirt color
+        string $file2 = `shadingNode -asTexture -isColorManaged -n ($colAr[8] + "_dColor_file") file`;
+        //Creates a file node for dirt rough
+        string $file3 = `shadingNode -asTexture -isColorManaged -n ($colAr[8] + "_dRough_file") file`;
+        //Sets the color space to Raw
+        setAttr($file3 + ".colorSpace") -type "string" "Raw";
+        //Creates a file node for dirt normal
+        string $file4 = `shadingNode -asTexture -isColorManaged -n ($colAr[8] + "_dNormal_file") file`; 
+        //Sets the color space to Raw
+        setAttr($file4 + ".colorSpace") -type "string" "Raw";
+        //Creats a place2dTexture node 
+        string $pTex2 = `shadingNode -asUtility place2dTexture`;
+        //Connects the newly created p2d node to the the three file nodes just created
+        p2DTexConnect($pTex2, $file2);
+        p2DTexConnect($pTex2, $file3);
+        p2DTexConnect($pTex2, $file4);
+        //Creates a layered texture node for color
+        string $clrNode = `shadingNode -asTexture layeredTexture`;
+        //Sets index 0 color to white(will be changed shortly)
+        setAttr ($clrNode + ".inputs[0].color") -type "double3" 1 1 1;
+        //Sets index 0 alpha to 1
+        setAttr ($clrNode + ".inputs[0].alpha") 1;
+        //Sets index 0 blend mode to "Over"
+        setAttr ($clrNode + ".inputs[0].blendMode") 1;
+        //Sets index 1 color to whatever color the colorLibrary had preset 
+        setAttr ($clrNode + ".inputs[1].color") -type "double3" $colArF[0]  $colArF[1] $colArF[2];
+        //Sets index 1 alpha to 1
+        setAttr ($clrNode + ".inputs[1].alpha") 1;
+        //Sets index 1 blend mode to "None"
+        setAttr ($clrNode + ".inputs[1].blendMode") 0;
+        //Connects the dirt color file node out color to index 0 color of the layered texture
+        connectAttr -force ($file2 + ".outColor") ($clrNode + ".inputs[0].color");
+        //Connects the dirt color file node out alpha to index 0 alpha of the layered texture  
+        connectAttr -force ($file2 + ".outAlpha") ($clrNode + ".inputs[0].alpha");
+        //Connects the layered texture to the Arnold base color
+        connectAttr -force ($clrNode + ".outColor") ($myMat + ".baseColor"); 
+        //Creates layered texture for roughness 
+        string $rghNode = `shadingNode -asTexture layeredTexture`;
+        //Sets index 0 color to white(will be changed shortly)
+        setAttr ($rghNode + ".inputs[0].color") -type "double3" 1 1 1;
+        //Sets index 0 alpha to 1
+        setAttr ($rghNode + ".inputs[0].alpha") 1;
+        //Sets index 0 blend mode to "Over"
+        setAttr ($rghNode + ".inputs[0].blendMode") 1;
+        //Sets index 1 color to whatever roughness the colorLibrary had preset 
+        setAttr ($rghNode + ".inputs[1].color") -type "double3"  $colArF[4] $colArF[4] $colArF[4];
+        //Sets index 1 alpha to 1
+        setAttr ($rghNode + ".inputs[1].alpha") 1;
+        //Sets index 1 blend mode to "None"
+        setAttr ($rghNode + ".inputs[1].blendMode") 0;
+        //Turns on alpha is luminance
+        setAttr ($rghNode + ".alphaIsLuminance") 1;
+        //Connects the dirt rough file node out color to index 0 color of the layered texture
+        connectAttr -force ($file3 + ".outColor") ($rghNode + ".inputs[0].color"); 
+        //Connects the dirt rough file node out alpha to index 0 alpha of the layered texture
+        connectAttr -force ($file3 + ".outAlpha") ($rghNode + ".inputs[0].alpha");
+        //Connects the layered texture to the Arnold specular roughness
+        connectAttr -force ($rghNode + ".outAlpha") ($myMat + ".specularRoughness");
+        //Sees if the user is using normal maps as well as dirt maps
+        if($norm == 1){
+            //Creates a blend colors node
+            string $nrmBlnd = `shadingNode -asUtility blendColors`;
+            //Connects the dirt normal map file node to color 1 of the blend node
+            connectAttr -f ($file4 + ".outColor") ($nrmBlnd + ".color1");
+            //Connects the base normal map file node to color 2 of the blend node
+            connectAttr -f ($file1 + ".outColor") ($nrmBlnd + ".color2");
+            //Connects the blend node to the Arnold normal node (which was previously hooked up to the Arnold material)
+            connectAttr -f ($nrmBlnd + ".output") ($aNorm + ".input");
+        //Sees if user is just using dirt maps
+        }else{
+            //Creates Arnold normal map node, as one was not created earlier
+            $aNorm = `shadingNode -asUtility aiNormalMap`;
+            //Connects dirt normal map file node to Arnold normal map node
+            connectAttr -f ($file4 + ".outColor") ($aNorm + ".input");
+            //Connects Arnold normal map node to Arnold material
+            connectAttr -f ($aNorm + ".outValue") ($myMat + ".normalCamera");
+        }  
+        //Sets the Dirt color file node's file  
+        setAttr -type "string" ($file2 +".fileTextureName") ($txP + "/Textures/Dirt/Color/Dirt"+ $rndNm + "CLR.png") ;
+        //Sets the Dirt rough file node's file
+        setAttr -type "string" ($file3 +".fileTextureName") ($txP + "/Textures/Dirt/Rough/Dirt" + $rndNm + "Rgh.png") ;
+        //Sets the Dirt normal file node's file
+        setAttr -type "string" ($file4 +".fileTextureName") ($txP + "/Textures/Dirt/Normal/Dirt" + $rndNm + "NM.png") ;
+    }   
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//Procedure to make the redshift material, gets passed (brick number, color array, library path, dirt int, norm int)
+proc rdMat(string $brickNumb, string $colAr[], string $txP, int $dirt, int $norm){
+    //Initializes array for float numbers
+    float $colArF[];
+    //Creates Redshift material
+    string $myMat = `shadingNode -asShader RedshiftMaterial -n ($colAr[8] + $brickNumb)`;
+    //Creates render set thing(I'm not positive on what this does but every material seems to have one)
+    string $mySet = `sets -renderable true -noSurfaceShader true -empty -name ($myMat + "SG")`;
+    //Connects Redshift material to set
+    connectAttr -f ($myMat + ".outColor") ($mySet + ".surfaceShader");
+    //initializes i
+    int $i;
+    //Loop for converting color library array to floats from strings, -1 for size becuase the final element is the name of the color, and cannot be converted to a float
+    for($i = 0; $i < (size($colAr)-1); $i++){
+        $colArF[$i] = (float)$colAr[$i];
+    } 
+    //Initializes $file1 so it can be called outside of this if statement
+    string $file1;
+    //Sees if the user wants normal maps
+    if($norm == 1){
+        //Creates Redshift Normal map node
+        $file1 = `shadingNode -asTexture RedshiftNormalMap  -n ($colAr[8] + "_normal_file")`;
+        //Creates a place2dtexture node
+        string $pTex1 = `shadingNode -asUtility place2dTexture`;
+        //Connects p2dTexture node to Redshift normal map
+        connectAttr ($pTex1+ ".outUV") ($file1 + ".uv");
+        //Sets Redshift Normal map file to base normal map
+        setAttr -type "string" ($file1 +".tex0") ($txP + "/Textures/Normal/" + $brickNumb + "NM" + ".png");
+        //Connects Redshift Normal map to Redshift material
+        connectAttr -f ($file1 + ".outDisplacementVector") ($myMat + ".bump_input");
+    }
+    //Sets Redshift color
+    setAttr ($myMat + ".diffuse_color") -type double3 $colArF[0]  $colArF[1] $colArF[2];
+    //Sets Redshift color weight
+    setAttr ($myMat + ".diffuse_weight") $colArF[3];
+    //Sets Redshift material roughness
+    setAttr ($myMat + ".refl_roughness") $colArF[4];
+    //Sets Redshift reflection weight
+    setAttr ($myMat + ".refr_weight") $colArF[5];
+    //Sets Redshift coat roughness
+    setAttr ($myMat + ".coat_roughness") $colArF[6];
+    //Sets Redshift coat IOR
+    setAttr ($myMat + ".coat_ior") $colArF[7];
+    //Checks to see if the user wants dirt maps
+    if($dirt == 1){
+        //Sets $rndNum to a random number, so dirt maps can be randomly applied (currently I only have one map, thus this only returns "1" at the moment
+        int $rndNm = `rand 1 2`;
+        //Creates dirt color file node
+        string $file2 = `shadingNode -asTexture -isColorManaged -n ($colAr[8] + "_dColor_file") file`;
+        //Creates dirt rough file node
+        string $file3 = `shadingNode -asTexture -isColorManaged -n ($colAr[8] + "_dRough_file") file`;
+        //Sets color space to raw
+        setAttr($file3 + ".colorSpace") -type "string" "Raw";
+        //Creates Redshift normal map
+        string $file4 = `shadingNode -asTexture RedshiftNormalMap -n ($colAr[8] + "_dNormal_file")`; 
+        //Create place 2d Texture node
+        string $pTex2 = `shadingNode -asUtility place2dTexture`;
+        //Calls p2dTexture connect procedure, and connects the just created place 2d Texture to the two file nodes just created
+        p2DTexConnect($pTex2, $file2);
+        p2DTexConnect($pTex2, $file3);
+        //Connects p2dTexture node to Redshift normal map node
+       connectAttr ($pTex2+ ".outUV") ($file4 + ".uv");
+        //Creates layered texture for color
+        string $clrNode = `shadingNode -asTexture layeredTexture`;
+        //Sets index 0 color to white(will be changed shortly)
+        setAttr ($clrNode + ".inputs[0].color") -type "double3" 1 1 1;
+        //Sets index 0 alpha to 1
+        setAttr ($clrNode + ".inputs[0].alpha") 1;
+        //Sets index 0 blend mode to "Over"
+        setAttr ($clrNode + ".inputs[0].blendMode") 1;
+        //Sets index 1 color to whatever color the colorLibrary had preset 
+        setAttr ($clrNode + ".inputs[1].color") -type "double3" $colArF[0]  $colArF[1] $colArF[2];
+        //Sets index 1 alpha to 1 
+        setAttr ($clrNode + ".inputs[1].alpha") 1;
+        //Sets index 1 blend mode to "None"
+        setAttr ($clrNode + ".inputs[1].blendMode") 0;
+        //Connects color file node out color to layered texture index 0 color
+        connectAttr -force ($file2 + ".outColor") ($clrNode + ".inputs[0].color"); 
+        //Connects color file node out alpha to layered texture index 0 alpha
+        connectAttr -force ($file2 + ".outAlpha") ($clrNode + ".inputs[0].alpha");
+        //Connects layered texture out color to Redshift material diffuse color
+        connectAttr -force ($clrNode + ".outColor") ($myMat + ".diffuse_color"); 
+        //Creates layered texture for roughness 
+        string $rghNode = `shadingNode -asTexture layeredTexture`;
+        //Sets index 0 color to white(will be changed shortly)
+        setAttr ($rghNode + ".inputs[0].color") -type "double3" 1 1 1;
+        //Sets index 0 alpha to 1
+        setAttr ($rghNode + ".inputs[0].alpha") 1;
+        //Sets index 0 blend mode to "Over"
+        setAttr ($rghNode + ".inputs[0].blendMode") 1;
+        //Sets index 1 color to whatever roughness the colorLibrary had preset 
+        setAttr ($rghNode + ".inputs[1].color") -type "double3" $colArF[4] $colArF[4] $colArF[4];
+        //Sets index 1 alpha to 1 
+        setAttr ($rghNode + ".inputs[1].alpha") 1;
+        //Sets index 1 blend mode to "None"
+        setAttr ($rghNode + ".inputs[1].blendMode") 0;
+        //Turns on alpha is lumincance
+        setAttr ($rghNode + ".alphaIsLuminance") 1;
+        //Connects rough file node out color to layered texture index 0 color
+        connectAttr -force ($file3 + ".outColor") ($rghNode + ".inputs[0].color"); 
+        //Connects rough file node out alpha to layered texture index 0 alpha
+        connectAttr -force ($file3 + ".outAlpha") ($rghNode + ".inputs[0].alpha");
+        //Connects layered texture out alpha to Redshift material reflection roughness
+        connectAttr -force ($rghNode + ".outAlpha") ($myMat + ".refl_roughness");
+        //Checks if user is using normal maps as well as normal maps
+        if($norm == 1){
+            //Creats blend node
+            string $nrmBlnd = `shadingNode -asUtility blendColors`;
+            //Connects dirt color normal map out color to blend node color 1
+            connectAttr -f ($file4 + ".outDisplacementVector") ($nrmBlnd + ".color1");
+            //Connects base normal map out color to blend node color 2
+            connectAttr -f ($file1 + ".outDisplacementVector") ($nrmBlnd + ".color2");
+            //Connects blend node output to Redshift material bump input
+            connectAttr -f ($nrmBlnd + ".output") ($myMat + ".bump_input");
+        //Checks if the user is using only dirt maps
+        }else{
+            //Connects dirt normal map to Redshift material bump input 
+            connectAttr -f ($file4 + ".outDisplacementVector") ($myMat + ".bump_input");
+        }    
+        //Sets dirt color file node file
+        setAttr -type "string" ($file2 +".fileTextureName") ($txP + "/Textures/Dirt/Color/Dirt"+ $rndNm + "CLR.png");
+        //Sets dirt rough file node file
+        setAttr -type "string" ($file3 +".fileTextureName") ($txP + "/Textures/Dirt/Rough/Dirt" + $rndNm + "Rgh.png");
+        //Sets dirt normal map file
+        setAttr -type "string" ($file4 +".tex0") ($txP + "/Textures/Dirt/Normal/Dirt" + $rndNm + "NM" + ".png");
+    }   
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//Procedure that hooks the passed in place2dTexture to the passed in file node, replicating the connection maya auto does for you if you create a file node in hypershade 
+proc p2DTexConnect(string $pTex, string $file){
+    connectAttr -force ($pTex + ".outUV") ($file + ".uvCoord"); 
+    connectAttr -force ($pTex + ".outUvFilterSize") ($file + ".uvFilterSize"); 
+    connectAttr -force ($pTex + ".coverage") ($file + ".coverage"); 
+    connectAttr -force ($pTex + ".translateFrame") ($file + ".translateFrame"); 
+    connectAttr -force ($pTex + ".rotateFrame") ($file + ".rotateFrame"); 
+    connectAttr -force ($pTex + ".mirrorU") ($file + ".mirrorU"); 
+    connectAttr -force ($pTex + ".mirrorV") ($file + ".mirrorV"); 
+    connectAttr -force ($pTex + ".stagger") ($file + ".stagger"); 
+    connectAttr -force ($pTex + ".wrapU") ($file + ".wrapU"); 
+    connectAttr -force ($pTex + ".wrapV") ($file + ".wrapV"); 
+    connectAttr -force ($pTex + ".repeatUV") ($file + ".repeatUV"); 
+    connectAttr -force ($pTex + ".vertexUvOne") ($file + ".vertexUvOne"); 
+    connectAttr -force ($pTex + ".vertexUvTwo") ($file + ".vertexUvTwo"); 
+    connectAttr -force ($pTex + ".vertexUvThree") ($file + ".vertexUvThree"); 
+    connectAttr -force ($pTex + ".vertexCameraOne") ($file + ".vertexCameraOne"); 
+    connectAttr -force ($pTex + ".noiseUV") ($file + ".noiseUV"); 
+    connectAttr -force ($pTex + ".offset") ($file + ".offset"); 
+    connectAttr -force ($pTex + ".rotateUV") ($file + ".rotateUV");
+} 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//Procedure that takes the color number from the .lxfml file and uses it to return an array with the correct values to create that color
+proc string[] colorLibrary(string $colAr[]){
+    string $col = $colAr[0];
+    if($col == "1"){ 
+    //1 White: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"1","1","1","1",".325","0","0","1","White"};
+        
+    }else if($col == "5"){ 
+    //5 Brick Yellow: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.630766","0.491011","0.208633","1",".325","0","0","1","BrickYellow"};
+        
+    }else if($col == "18"){ 
+    //18 Nougat: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.520986","0.16513","0.0595126","1",".325","0","0","1","Nougat"};
+    
+    }else if($col == "21"){ 
+    //21 Bright Red: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.7098","0","0","1",".325","0","0","1","BrtRed"};
+    
+    }else if($col == "23"){ 
+    //23 Bright Blue: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0","0","0.955963","1",".325","0","0","1","BrtBlue"};
+    
+    }else if($col == "24"){ 
+    //24 Bright Yellow: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"1.000024","1.000024","0.0451856","1",".325","0","0","1","BrtYlw"};
+    
+    }else if($col == "26"){ 
+    //26 Black: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0","0","0","1",".325","0","0","1","Black"};
+    
+    }else if($col == "28"){ 
+    //28 Dark Green: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.0930569","0.313996","0.0176416","1",".325","0","0","1","DarkGreen"};
+    
+    }else if($col == "37"){ 
+    //37 Bright Green: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.171438","0.597204","0.0295569","1",".325","0","0","1","BrtGreen"};
+    
+    }else if($col == "38"){ 
+    //38 Dark Orange: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.287446","0.0497067","0.0129832","1",".325","0","0","1","DarkOrange"};
+    
+    }else if($col == "102"){ 
+    //102 Medium Blue: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.11954","0.258183","0.545717","1",".325","0","0","1","MedBlue"};
+    
+    }else if($col == "106"){ 
+    //106 Bright Orange: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.745418","0.132871","0.00913407","1",".325","0","0","1","BrightOrange"};
+    
+    }else if($col == "119"){ 
+    //119 Bright Yellowish Green: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.346709","0.479312","0.0273214","1",".325","0","0","1","BrtYlwGrn"};
+    
+    }else if($col == "124"){ 
+    //124 Bright Reddish Violet: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.223224","0","0.12744","1",".325","0","0","1","BrtRdViolet"};
+    
+    }else if($col == "135"){ 
+    //135 Sand Blue: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.130139","0.171438","0.254152","1",".325","0","0","1","SandBlue"};
+    
+    }else if($col == "138"){ 
+    //138 Sand Yellow: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.234548","0.171438","0.0908397","1",".325","0","0","1","SandYellow"};
+    
+    }else if($col == "140"){ 
+    //140 Earth Blue: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.00856801","0.0231537","0.0544813","1",".325","0","0","1","EarthBlue"};
+    
+    }else if($col == "141"){ 
+    //141 Earth Green: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.0137021","0.0368897","0.00402471","1",".325","0","0","1","EarthGreen"};
+    
+    }else if($col == "151"){ 
+    //151 Sand Green: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.144131","0.219522","0.132871","1",".325","0","0","1","SandGreen"};
+    
+    }else if($col == "154"){ 
+    //154 New Dark Red: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.152927","0.00560538","0.0144438","1",".325","0","0","1","NewDarkRed"};
+    
+    }else if($col == "191"){ 
+    //191 Flame Yellowish Orange: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.730474","0.323151","0.0176416","1",".325","0","0","1","FlmYlwOrng"};
+    
+    }else if($col == "192"){ 
+    //192 Reddish Brown: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.080219","0.015996","0.00749891","1",".325","0","0","1","ReddishBrown"};
+    
+    }else if($col == "194"){
+    //194 Medium Stone Grey: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.313996","0.283153","0.278898","1",".325","0","0","1","MedStoneGrey"};
+    
+    }else if($col == "199"){ 
+    //199 Dark Grey: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.078187","0.0843749","0.0930569","1",".325","0","0","1","DarkGrey"};
+    
+    }else if($col == "208"){ 
+    //208 Light Stone Grey: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.768161","0.768161","0.693886","1",".325","0","0","1","LtStoneGrey"};
+    
+    }else if($col == "212"){ 
+    //212 Light Royal Blue: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.318555","0.520986","0.806955","1",".325","0","0","1","LtRylBlue"};
+    
+    }else if($col == "221"){ 
+    //221 Bright Purple: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.527105","0.0423106","0.2462","1",".325","0","0","1","BrtPurple"};
+    
+    }else if($col == "222"){ 
+    //222 Light Purple: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.701117","0.332458","0.527105","1",".325","0","0","1","LtPurple"};
+    
+    }else if($col == "226"){ 
+    //226 Cool Yellow: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"1.000024","1.000024","0.34192","1",".325","0","0","1","CoolYlw"};
+    
+    }else if($col == "268"){ 
+    //268 Medium Lilac: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.024158","0.0116125","0.174644","1",".325","0","0","1","MedLilac"};
+    
+    }else if($col == "283"){ 
+    //283 Light Nougat: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.799106","0.527105","0.258183","1",".325","0","0","1","LtNougat"};
+    
+    }else if($col == "308"){ 
+    //308 Dark Brown: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.0262418","0.00802302","0.00477707","1",".325","0","0","1","DarkBrown"};
+        
+    }else if($col == "312"){ 
+    //312 Medium Nougat: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.33717","0.201554","0.0975854","1",".325","0","0","1","MedNougat"};
+    
+    }else if($col == "321"){ 
+    //321 Dark Azir: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.135636","0.323151","0.527105","1",".325","0","0","1","DarkAzir"};
+    
+    }else if($col == "322"){ 
+    //322 Medium Azir: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.250158","0.539471","0.745418","1",".325","0","0","1","MedAzir"};
+    
+    }else if($col == "323"){ 
+    //323 Aqua: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.70839","0.88791","0.822785","1",".325","0","0","1","Aqua"};
+    
+    }else if($col == "324"){ 
+    //324 Medium Lavender: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.291777","0.155927","0.462069","1",".325","0","0","1","MedLavender"};
+    
+    }else if($col == "325"){ 
+    //325 Lavender: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.533267","0.366255","0.70839","1",".325","0","0","1","Lavender"};
+    
+   }else if($col == "326"){ 
+    //326 Spring Yellowish Green: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.806955","0.947294","0.34192","1",".325","0","0","1","SprnYlwGrn"};
+    
+    }else if($col == "329"){ 
+    //329 White Glow: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.904645","0.896255","0.679556","1",".325","0","0","1","WhiteGlow"};
+    
+    }else if($col == "330"){ 
+    //330 Olive Green: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.181162","0.181162","0.0822816","1",".325","0","0","1","OliveGreen"};
+
+    //Transparent Materials
+    
+    }else if($col == "40"){ 
+    //40 Transparent: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"1","1","1","1",".325",".65","0","1","Transparent"};
+    
+    }else if($col == "41"){ 
+    //41 Transparent Red: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.533267","0.0273214","0.0262418","1",".325",".50","0","1","TrRed"};
+    
+    }else if($col == "42"){ 
+    //42 Transparent Light Blue: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.539471","0.737923","0.814847","1",".325",".50","0","1","TrLtBlue"};
+    
+    }else if($col == "43"){ 
+    //43 Transparent Blue: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.181162","0.434148","0.783544","1",".325",".50","0","1","TrBlue"};
+    
+    }else if($col == "44"){ 
+    //44 Transparent Yellow: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.921566","0.854984","0.168266","1",".325",".50","0","1","TrYellow"};
+    
+    }else if($col == "47"){ 
+    //47 Transparent Fluorescent Reddish Orange: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.603831","0.132871","0.0703605","1",".325",".50","0","1","TrFlRdOrng"};
+    
+    }else if($col == "48"){ 
+    //48 Transparent Green: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.212227","0.439651","0.16513","1",".325",".50","0","1","TrGreen"};
+    
+    }else if($col == "49"){ 
+    //49 Transparent Fluorescent Green: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.921566","0.838794","0.135636","1",".325",".50","0","1","TrFlGrn"};
+    
+    }else if($col == "111"){ 
+    //111 Transparent Brown: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.347","0.279162","0.223468","1",".325",".50","0","1","TrBrown"};
+    
+    }else if($col == "113"){ 
+    //113 Transparent Medium Reddish Violet: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.701","0.332274","0.526955","1",".325",".50","0","1","TrMedRdVio"};
+    
+    }else if($col == "126"){ 
+    //126 Transparent Bright Bluish Violet: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.318555","0.296145","0.552005","1",".325",".50","0","1","TrBrtBluVio"};
+    
+    }else if($col == "143"){ 
+    //143 Transparent Fluorescent Blue: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.651417","0.760535","0.913082","1",".325",".50","0","1","TrFlBlu"};
+    
+    }else if($col == "182"){ 
+    //182 Transparent Bright Orange: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.64449","0.177885","0.015996","1",".325",".50","0","1","TrBrtOrng"};
+    
+    }else if($col == "294"){ 
+    //294 Phosphorus Green: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.672457","0.70839","0.266357","1",".325",".50","0","1","PhGreen"};
+    
+    }else if($col == "311"){ 
+    //311 Transparent Bright Green: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.502714","1","0.168","1",".325",".50","0","1","TrBrGreen"};
+    
+    //Metallic Colors
+    
+    }else if($col == "297"){ 
+    //297 Warm Gold: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.34192","0.208633","0.0395457","1",".325","0","0","1","WarmGold"};
+    
+    }else if($col == "309"){ 
+    //309 Metalized Silver: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.610501","0.610501","0.610501","1",".325","0","0","1","MtlSilver"};
+    
+    }else if($col == "310"){ 
+    //310 Metalized Gold: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.672457","0.527105","0.194618","1",".325","0","0","1","MtlGold"};
+    
+    }else if($col == "315"){ 
+    //315 Silver Metallic: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.258183","0.258183","0.258183","1",".325","0","0","1","SlvrMetall"};
+    
+    }else if($col == "316"){ 
+    //316 Titanium Metallic: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.0512699","0.0481717","0.0451856","1",".325","0","0","1","TiMetall"};
+    
+    //Legacy Colors
+    
+    }else if($col == "2"){ 
+    //2 Grey: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.715708","0.72307","0.715708","1",".325","0","0","1","Grey"};
+    
+    }else if($col == "3"){ 
+    //3 Light Yellow: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.904645","0.6654","0.226962","1",".325","0","0","1","LtYellow"};
+    
+    }else if($col == "9"){ 
+    //9 Light Reddish Violet: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.768161","0.391571","0.485141","1",".325","0","0","1","LtRdVio"};
+    
+    }else if($col == "11"){ 
+    //11 Pastel Blue: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.479312","0.6867","0.991112","1",".325","0","0","1","PasBlue"};
+    
+    }else if($col == "25"){ 
+    //25 Earth Orange: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.0742136","0.0368897","0.0152083","1",".325","0","0","1","ErthOrange"};
+    
+    }else if($col == "27"){ 
+    //27 Dark Grey: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.114436","0.109461","0.0886537","1",".325","0","0","1","DrkGrey"};
+    
+    }else if($col == "50"){ 
+    //50 Phosphorescent White: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.760535","0.730474","0.64449","1",".325","0","0","1","PhWhite"};
+   
+    }else if($col == "105"){ 
+    //105 Bright Yellowish Orange: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.715708","0.234548","0.0307131","1",".325","0","0","1","BrtYlwOrng"};
+    
+    }else if($col == "107"){ 
+    //107 Bright Bluish Greent: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.0975854","0.332458","0.33717","1",".325","0","0","1","BrtBluGrn"};
+    
+    }else if($col == "139"){ 
+    //139 Copper: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.149961","0.0761852","0.0481717","1",".325","0","0","1","Copper"};
+    
+    }else if($col == "145"){ 
+    //145 Metallic Sand Blue: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.124774","0.174644","0.2705","1",".325","0","0","1","MtSndBlu"};
+    
+    }else if($col == "147"){ 
+    //147 Metallic Sand Yellow: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.208633","0.16513","0.0843749","1",".325","0","0","1","MtSndYlw"};
+   
+    }else if($col == "153"){ 
+    //153 Sand Red: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.597204","0.323151","0.300551","1",".325","0","0","1","SndRed"};
+    
+    }else if($col == "179"){ 
+    //179 Silver Flip/Flop: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.412539","0.412539","0.412539","1",".325","0","0","1","SlvFlpFlp"};
+    
+    }else if($col == "195"){ 
+    //195 Royal Blue: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.0395457","0.0998969","0.366255","1",".325","0","0","1","RylBlue"};
+    
+    }else if($col == "217"){ 
+    //217 Brown: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.171438","0.109461","0.0578068","1",".325","0","0","1","Brown"};
+    
+    }else if($col == "298"){ 
+    //298 Cool Silver: R,G,B,Base Color Weight, Specular Roughness, Transmission(opacity), coat roughness, coat IOR, color name
+    $colAr = {"0.412539","0.412539","0.412539","1",".325","0","0","1","ClSilver"};
+    
+    }
+    return$colAr;
+}

@@ -1,0 +1,282 @@
+/* 
+Ldd to Maya Brick Check Script by Brandon Bower
+Created on 5/24/2018, in Maya 2018
+Open to public use, as well as modification, but in no way can be distributed for financial gain, or modified and distributed for financial gain
+
+Instructions: run code, enjoy! :D
+*/
+
+//Decides what file type will be filter for
+string $singleFilter = "*.lxfml";
+//Array to track that both path fields have been filled
+int $checkIfFilled[] = {0,0};
+//Checks if Window already exists, and if it does, deletes it    
+if(`window -ex "checkWindow"`){
+    deleteUI "checkWindow";
+}
+//Sets window title, if it is scalable, and name of window
+window -t "Brick Check Settings"  -s false "checkWindow";
+    //Sets window layout to cloumns
+    columnLayout;
+        //Creates button, that when pressed launches a file dialog, changes button label to file path, and checks if all fields have yet been filled using the allFill procedure
+        string $fileButton = `button -l "Select .lxfml file path" -w 280 -c "string $filePath[] = `fileDialog2 -fileFilter $singleFilter -cap \"Select File to Convert\" -fm 1 -dialogStyle 2`; button -edit -l $filePath[0] $fileButton; $checkIfFilled[0] = 1; allFill($checkIfFilled, $convertButton);"` ;
+        //Creates button, that when pressed launches a file dialog, changes button label to file path, and checks if all fields have yet been filled using the allFill procedure
+        string $brickButton = `button -l "Select Brick Library Path" -w 280  -c "string $brickPath[] = `fileDialog2 -cap \"Select File to Convert\" -fm 3 -dialogStyle 2`; button -edit -l $brickPath[0] $brickButton; $checkIfFilled[1] = 1; allFill($checkIfFilled, $convertButton);"` ;
+        //Creates the final button, in a unenabled state, when button is clicked, triggers the read procedure
+        string $convertButton = `button -l "Check Library" -en false -w 280 -c"deleteUI \"checkWindow\"; readProc($filePath[0],$brickPath[0]);"`; 
+//Shows Window        
+showWindow "checkWindow";
+//Sets Window Size
+window -e -wh 280 70 "checkWindow";
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//Procedure to check if all fields have filled, using the $checkIfFilled Array. Also passes in the $convertButton, so state can be changed.
+proc allFill(int $check[], string $button){
+    //Checks that both text fields have been filled.
+    if($check[0] == 1 && $check[1] == 1){
+        //Enables convert button
+        button -edit -en true $button;   
+    }else{
+        //Disables convert button
+        button -edit -en false $button;   
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//Procedure to read lxfml file and convert it to raw data, gets passed the (file, brick library path)
+proc readProc(string $file, string $bPath){
+    //Initializes arrays for sorting
+    string $sortArray1[];
+    string $sortArray2[];
+    string $sortArray3[];
+    string $brickArray[];
+    string $brickNumb;
+    string $colorArray[];
+    string $decoArray[];
+    string $posArray[];
+    float $posFArray[];
+    int $brickNumbArray[];
+    //Initializes counter variables
+    int $i = 0;
+    int $index;
+    int $lpCount;
+    int $start;
+    int $end;
+    //Takes passed in lxfml file, and gives it unique identifier id
+    int $fileId=fopen($file,"r");
+    //Sets $next line to top line of the file
+    string $nextLine = `fgetline $fileId`;
+    //Sets a loop that only goes while there are lines of text to be read
+    while ( size( $nextLine ) > 0 ) {
+        //Sets each line as a spot in the array
+        $sortArray1[$i] = ($nextLine);
+        //Strips white space from either side of text in each array element
+        $sortArray1[$i] = strip($sortArray1[$i]);
+        //Advances counter to continue filling the array
+        $i++;
+        //Advances to next line
+    	$nextLine = `fgetline $fileId`;	
+    }
+    
+    //Now to sort out the bricks from the unneeded lines of code
+    
+    //Sets the start of desired selection, +2 is added so "</Cameras>" and the line below it are excluded
+    $start = (stringArrayFind("</Cameras>", 0, $sortArray1)+ 2);
+    //Sets the end of desired selection
+    $end = stringArrayFind("</Bricks>",0, $sortArray1);
+    //Sets index to 0 to be used as a counter
+    $index = 0;
+    //Initializes for loop that starts at start of selection and goes until the end of the selection is reached
+    for($i = $start; $i < $end; $i++){
+        //Sets $sortArray3 at [$index] to $sortArray1 at [$i]
+        $sortArray3[$index] = $sortArray1[$i];
+        //Advances $index so nothing is overwritten
+        $index++;
+    }
+
+    //Next is to remove all the filler between the bricks that is not needed
+    
+    //Fill $items array with the strings needing to be removed
+    string $items[] = {"</Brick>","</Part>"};
+    //Takes sort Array2 and sets it equal to sortArray3 minus the items in $items
+    string $sortArray2[] = stringArrayRemove($items, $sortArray3);
+    //Clears $sortArray1 $sortArray3 and index, so they can be used anew
+    clear $sortArray1; 
+    clear $sortArray3;
+    $index = 0;
+    //The "<Brick refid...." line on some of the bricks are not needed, and thus will be removed
+    //Sets loops to run while $sortArray2 has elements to sort through
+    while(size($sortArray2) > 0){
+        //Finds "</Bone>" which is what devides each section, and sets where it occurs in the array as our end number
+        $end = stringArrayFind("</Bone>",0, $sortArray2);
+        //Starts loop that will run until $i = $end
+        for($i = 0; $i <= $end; $i++){
+            //Puts everything up to and including the first occurance of "</Bone>" into $sortArray3
+            $sortArray3[$i] = $sortArray2[$i];
+        }
+        //Checks to see if $sortArray3 has the "<Brick refid..." line that needs to removed
+        if(size($sortArray3) == 4){
+            //Removes "<Brick refid..."
+            stringArrayRemoveAtIndex(3, $sortArray3);
+            //Removes "</Bone>"
+            stringArrayRemoveAtIndex(0, $sortArray3);
+            //Sets the contents of sortArray3 at 0 to sortArray1 at index
+            $sortArray1[$index] = $sortArray3[0];
+            //Advances index to avoid overwriting
+            $index++;
+            //Sets the contents of sortArray3 at 1 to sortArray1 at index
+            $sortArray1[$index] = $sortArray3[1];
+            //Advances index to avoid overwriting
+            $index++;
+            //Removes the lines of $sortArray2 that have just been gone through
+            stringArrayRemoveAtIndex(0, $sortArray2);
+            stringArrayRemoveAtIndex(0, $sortArray2);
+            stringArrayRemoveAtIndex(0, $sortArray2);
+            stringArrayRemoveAtIndex(0, $sortArray2); 
+        //Checks to see if $sortArray3 doesn't have the "<Brick refid..." line that needs to removed   
+        }else if(size($sortArray3) == 3){
+            //Removes "</Bone>"
+            stringArrayRemoveAtIndex(2, $sortArray3);
+            //Sets the contents of sortArray3 at 0 to sortArray1 at index
+            $sortArray1[$index] = $sortArray3[0];
+            //Advances index to avoid overwriting
+            $index++;
+            //Sets the contents of sortArray3 at 1 to sortArray1 at index
+            $sortArray1[$index] = $sortArray3[1];
+            //Advances index to avoid overwriting
+            $index++;
+            //Removes the lines of $sortArray2 that have just been gone through
+            stringArrayRemoveAtIndex(0, $sortArray2);
+            stringArrayRemoveAtIndex(0, $sortArray2);
+            stringArrayRemoveAtIndex(0, $sortArray2);  
+        }
+    }  
+    //Clears $sortArray2, $sortArray3, and $index to be used anew
+    clear $sortArray2;
+    clear $sortArray3;
+    $index = 0;
+    
+    //Getting closer to the values needed
+    
+    //Initializes for loop that only goes while there are entries in $sortArray1 to be read
+    for($i = 0; $i < size($sortArray1); $i++){
+        //Splits each entry wherever there is a space, and sorts the new strings into $sortAray2 
+        tokenize($sortArray1[$i], " ", $sortArray2);
+        //Removes "<Part" and "refID = "#" as they are unneeded
+        stringArrayRemoveAtIndex(0, $sortArray2);
+        stringArrayRemoveAtIndex(0, $sortArray2);
+        //Some bricks don't have a decoration, so an empty value must be added to work with code later down the line
+        //Checks for if array is 2, one short of the usual 3, meaning no decoration is present
+        if(size($sortArray2) == 2){
+            //inserts decoration at array element 2 (the end of the array)
+            stringArrayInsertAtIndex(2, $sortArray2, "decoration=\"0,0,0\"");        
+        }
+        //Resets $lpCount so it can be used anew
+        $lpCount = 0;
+        //Tokenize rewrites over $sortArray2 each time the above for loop is called, to prevent loss of information, each tokenize iteration resault must be saved to a unique spot $sortArray3
+        //Not all tokenize iterations are the same length, so the loop is set to go as long as $sortArray2 has elements
+        while($lpCount < size($sortArray2)){
+            //Takes whatever is stored in $sortArray2 at [$lpCount] and also stores it into $sortArray3 at [$index]
+            $sortArray3[$index] = $sortArray2[$lpCount];
+            //Advances index so nothing in $sortArray3 gets overwritten 
+            $index++;
+            //Advances $lpCount so the while loop can end, as well as cycle through all elements of $sortArray2
+            $lpCount++;
+            }
+    }
+    //Clears $sortAray1, $sortArray2 and $index so they can be used anew
+    clear $sortArray1;
+    clear $sortArray2;
+    $index = 0;
+    
+    //Next level of sorting to get at just the values
+    
+    //Initializes for loop that goes as long as there are entries in $sortArray3
+    for($i = 0; $i < size($sortArray3); $i++){
+        //Splits each entry wherever there is a backslash, and sorts the new strings into $sortArray1 
+        tokenize($sortArray3[$i], "\"", $sortArray1);
+        //Removes the designator text before the number as it is unneeded
+        stringArrayRemoveAtIndex(0, $sortArray1);
+        //Rests $lpCount so it can be used anew
+        $lpCount = 0;
+        //Just like last time, the elements of the array tokenize sorts into ($sortArray1), must be copied to a new array ($sortArray2) so as not to be overwritten
+        //Sets a loop for size of $sortArray1
+        while($lpCount < size($sortArray1)){
+            //Takes whatever is stored in $sortArray1 at [$lpCount] and also stores it into $sortArray2 at [$index]
+            $sortArray2[$index] = $sortArray1[$lpCount];
+            //Advances index so nothing in $sortArray2 gets overwritten
+            $index++;
+            //Advances $lpCount so the while loop can end, as well as cycle through all elements of $sortArray1
+            $lpCount++;
+            }
+    }
+    
+    //Removing the remaining ">" symbols from the code
+    
+    //Clears $items and $sortArray1 so they can be used anew
+    clear $items;
+    clear $sortArray1;
+    //Fills $items with one element, ">"
+    string $items[] = { ">" };
+    //Sets $sortArray1 to $sortArray2 minus the itmes (in this case ">") in $items
+    string $sortArray1[] = stringArrayRemove($items, $sortArray2);
+    //Sets $end to be size of the array/4, since the loop deals with 4 lines of code at a time 
+    $end = size($sortArray1)/4;
+    //Clearse $sortArray2 $sortArray3 and $index to be used anew
+    clear $sortArray2;
+    clear $sortArray3;
+    $index = 0;
+    //Initializes loop
+    for($i = 0; $i < $end; $i++){
+        //Sets $brickNumb to the first element of the array, which is the number LDD uses to I.D. bricks 
+        $brickNumb = $sortArray1[0];
+        //Gets the name of the link to whatever brick is currently being looked at
+        string $link = ($bPath + "/Bricks/" + $brickNumb + ".obj"); 
+        //Checks to see if brick file doesn't exist
+        if (`filetest -r $link` == 0){
+            //Checks to see if missing brick has already been logged
+            if(stringArrayContains($brickNumb, $sortArray2) == false){
+                //Logs missing brick into $sortArray2
+                $sortArray2[$index] = $brickNumb;
+                //Advances $index so as not to overwrite
+                $index++;
+            }
+        }
+        //Deletes the four array elements that have just been read, so the next time the loop is called, a new brick will be looked at
+        stringArrayRemoveAtIndex(0, $sortArray1);
+        stringArrayRemoveAtIndex(0, $sortArray1);
+        stringArrayRemoveAtIndex(0, $sortArray1);
+        stringArrayRemoveAtIndex(0, $sortArray1);     
+    }
+    //Initializes for loop that runs as long as $sortArray2 has items
+    for($i = 0; $i < size($sortArray2); $i++){
+        //Converts $sortArray2 a string array, to integer numbers in $brickNumbArray so it can be sorted
+        $brickNumbArray[$i] = (int)$sortArray2[$i];
+    }
+    //Sort brickNumbArray
+    $brickNumbArray = `sort $brickNumbArray`;
+    //Checks to see if there are no missing bricks
+    if(size($brickNumbArray) == 0){
+        //All bricks needed print message
+        print "Selected libaray contains all bricks required to make this model!";
+        //All bricks needed dialog box
+        confirmDialog -t "All Bricks Accounted For" -b "Awesome!" -db "Awesome!" -m "Selected libaray contains all bricks required to make this model.";
+    //Case for if there ARE missing bricks
+    }else{
+        //Bricks missing print message
+        print("Current selected library is missing " + size($brickNumbArray) + " bricks needed to construct this model:\n");
+        //Loop to hit every missing brick in the $brickNumbArray
+        for($each in $brickNumbArray){
+            //Individual missing brick print message
+            print ("Brick Number: " + $each + "\n");   
+        }
+        //Opens script editor so user can see the bricks printed in it
+        ScriptEditor;
+        //Missing bricks dialog box
+        confirmDialog -t (size($brickNumbArray) + " Bricks are missing") -b "Ok" -db "Ok" -m ("Current selected library is missing " + size($brickNumbArray) + " brick(s) needed to complete this model.\n(Listed in Script Editor History)");
+    } 
+} 
+ 
+
